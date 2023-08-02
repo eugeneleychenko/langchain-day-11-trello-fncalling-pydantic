@@ -36,6 +36,23 @@ def get_all_boards():
         st.error(f"Error parsing response as JSON: {e}")
     return []
 
+def get_all_members_on_board(board_id):
+    url = f'{BASE_URL}boards/{board_id}/members'
+    query = {
+        'key': API_KEY,
+        'token': TOKEN
+    }
+    response = requests.get(url, params=query)
+    response.raise_for_status()
+    return response.json()
+
+def fuzzy_search_member(board_id, member_name):
+    members = get_all_members_on_board(board_id)
+    matches = [(member, fuzz.ratio(member_name, member['fullName'])) for member in members]
+    best_match = max(matches, key=lambda match: match[1])
+    return best_match[0] if best_match[1] > 40 else None
+
+
 def get_all_lists_on_board(board_id):
     try:
         url = f'{BASE_URL}boards/{board_id}/lists'
@@ -165,6 +182,49 @@ def comment_on_card_fuzzy(board_name, card_name, comment):
         return
     make_comment_on_card(card['id'], comment)
 
+def add_member_to_card_fuzzy(board_name, card_name, member_name):
+    board = fuzzy_search_board(board_name)
+    if not board:
+        st.write(f"No board found with name {board_name}")
+        return
+    card = fuzzy_search_card(board['id'], card_name)
+    if not card:
+        st.write(f"No card found with name {card_name}")
+        return
+    member = fuzzy_search_member(board['id'], member_name)
+    if not member:
+        st.write(f"No member found with name {member_name}")
+        return
+    url = f'{BASE_URL}cards/{card["id"]}/idMembers'
+    query = {
+        'key': API_KEY,
+        'token': TOKEN,
+        'value': member['id']
+    }
+    response = requests.post(url, params=query)
+    response.raise_for_status()
+    return response.json()
+
+def create_card_on_board_fuzzy(board_name, list_name, card_name):
+    board = fuzzy_search_board(board_name)
+    if not board:
+        st.write(f"No board found with name {board_name}")
+        return
+    lst = fuzzy_search_list(board['id'], list_name)
+    if not lst:
+        st.write(f"No list found with name {list_name}")
+        return
+    url = f'{BASE_URL}cards'
+    query = {
+        'key': API_KEY,
+        'token': TOKEN,
+        'idList': lst['id'],
+        'name': card_name
+    }
+    response = requests.post(url, params=query)
+    response.raise_for_status()
+    return response.json()
+
 class FuzzySearchCardInput(BaseModel):
     """Input for Fuzzy Search Card."""
 
@@ -245,7 +305,70 @@ class CommentOnCardFuzzyTool(BaseTool):
 
     args_schema: Optional[Type[BaseModel]] = CommentOnCardFuzzyInput
 
-tools = CommentOnCardFuzzyTool(), MoveCardToListFuzzyTool(), FuzzySearchListTool(), FuzzySearchCardTool()
+# class CreateCardOnBoardInput(BaseModel):
+#     """Input for Create Card On Board."""
+
+#     board_name: str = Field(..., description="Name of the board")
+#     card_name: str = Field(..., description="Name of the card to be created")
+
+# class CreateCardOnBoardTool(BaseTool):
+#     name = "create_card_on_board"
+#     description = "Useful for when you need to create a card on a board. You should input the board name and the card name."
+
+#     def _run(self, board_name: str, card_name: str):
+#         created_card = create_card_on_board(board_name, card_name)
+
+#         return created_card
+
+#     def _arun(self, board_name: str, card_name: str):
+#         raise NotImplementedError("This tool does not support async")
+
+#     args_schema: Optional[Type[BaseModel]] = CreateCardOnBoardInput
+
+
+class AddMemberToCardFuzzyInput(BaseModel):
+    """Input for Add Member To Card Fuzzy."""
+
+    board_name: str = Field(..., description="Name of the board")
+    card_name: str = Field(..., description="Name of the card")
+    member_name: str = Field(..., description="Name of the member to be added")
+
+class AddMemberToCardFuzzyTool(BaseTool):
+    name = "add_member_to_card_fuzzy"
+    description = "Useful for when you need to add a member to a card on a board using fuzzy search. You should input the board name, card name and the member name."
+
+    def _run(self, board_name: str, card_name: str, member_name: str):
+        added_member = add_member_to_card_fuzzy(board_name, card_name, member_name)
+
+        return added_member
+
+    def _arun(self, board_name: str, card_name: str, member_name: str):
+        raise NotImplementedError("This tool does not support async")
+
+    args_schema: Optional[Type[BaseModel]] = AddMemberToCardFuzzyInput
+
+class CreateCardOnBoardFuzzyInput(BaseModel):
+    """Input for Create Card On Board Fuzzy."""
+
+    board_name: str = Field(..., description="Name of the board")
+    list_name: str = Field(..., description="Name of the list")
+    card_name: str = Field(..., description="Name of the card to be created")
+
+class CreateCardOnBoardFuzzyTool(BaseTool):
+    name = "create_card_on_board_fuzzy"
+    description = "Useful for when you need to create a card on a list on a board using fuzzy search. You should input the board name, list name and the card name."
+
+    def _run(self, board_name: str, list_name: str, card_name: str):
+        created_card = create_card_on_board_fuzzy(board_name, list_name, card_name)
+
+        return created_card
+
+    def _arun(self, board_name: str, list_name: str, card_name: str):
+        raise NotImplementedError("This tool does not support async")
+
+    args_schema: Optional[Type[BaseModel]] = CreateCardOnBoardFuzzyInput
+
+tools = CommentOnCardFuzzyTool(), MoveCardToListFuzzyTool(), FuzzySearchListTool(), FuzzySearchCardTool(), AddMemberToCardFuzzyTool(), CreateCardOnBoardFuzzyTool()
 
 llm = ChatOpenAI(temperature=0, model="gpt-4-0613", openai_api_key=openai_api_key)
 
@@ -254,8 +377,10 @@ agent = initialize_agent(tools, llm, agent=AgentType.OPENAI_FUNCTIONS, verbose=T
 st.title("Trello with Function Calling and Pydantic")
 
 command = st.text_input("Input your command for Trello")
+st.write("***Things you can do: Create a card, Move a card to a new list, Commment on a card, Add Members to cards***")
 
-if command:
-    # Process the command using the agent
-    response = agent.run(command)
-    st.write(response)
+if st.button("Enter"):
+    if command:
+        # Process the command using the agent
+        response = agent.run(command)
+        st.write(response)
