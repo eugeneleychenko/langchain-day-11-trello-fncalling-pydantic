@@ -1,0 +1,7 @@
+openai 
+langchain
+requests 
+fuzzywuzzy 
+python-Levenshtein 
+python-dotenv
+streamlit
